@@ -14,7 +14,7 @@ import socket
 import random
 import psutil
 
-from extensionsManager import *
+from .extensionsManager import *
 
 API_URL = 'https://api.gologin.com'
 
@@ -26,31 +26,47 @@ class GoLogin(object):
         self.address = options.get('address', '127.0.0.1')
         self.extra_params = options.get('extra_params', [])
         self.port  = options.get('port', 3500)
-        self.local = options.get('local', False)
+        self.local = options.get('local', True)
         self.spawn_browser = options.get('spawn_browser', True)
         self.credentials_enable_service = options.get('credentials_enable_service')
 
+        self.profile = options.get('profile', {})
+
+
         home = str(pathlib.Path.home())
-        browser_gologin = os.path.join(home, '.gologin', 'browser')
+        cwd = os.getcwd()
+
+        self.pathDownload = options.get('path_download', cwd)
+        self.pathFolderZero = options.get('path_FolderZero', os.path.join(cwd, 'gologin_default_zero'))
+        browser_gologin = os.path.join(cwd, '.gologin', 'browser')
         for orbita_browser in os.listdir(browser_gologin):
-            if not orbita_browser.endswith('.zip') and not orbita_browser.endswith('.tar.gz') and orbita_browser.startswith('orbita-browser'):
-                self.executablePath = options.get('executablePath', os.path.join(browser_gologin, orbita_browser, 'chrome'))
-                if not os.path.exists(self.executablePath) and not orbita_browser.endswith('.tar.gz') and sys.platform=="darwin":
-                    self.executablePath = os.path.join(home, browser_gologin, orbita_browser, 'Orbita-Browser.app/Contents/MacOS/Orbita')
-        print('executablePath', self.executablePath)
+            if not orbita_browser.endswith('.zip') and not orbita_browser.endswith('.tar.gz') and not orbita_browser.endswith('.rar') and orbita_browser.startswith('orbita-browser'):
+                self.executablePath = options.get('executablePath', os.path.join(browser_gologin, orbita_browser, 'chrome.exe'))
+
+        # print('executablePath', self.executablePath)
         if self.extra_params:
             print('extra_params', self.extra_params)
         self.setProfileId(options.get('profile_id')) 
         self.preferences = {}
         self.pid = int()
 
+    def getListProfile(self, page = 1):
+        url = "https://api.gologin.com/browser/v2"
+
+        payload={}
+        headers = {
+                    'Authorization': f'Bearer {self.access_token}'
+                }
+
+        return requests.request("GET", url + '?page=' + str(page), headers=headers, data=payload)
+
     def setProfileId(self, profile_id):
         self.profile_id = profile_id
         if self.profile_id==None:
             return
-        self.profile_path = os.path.join(self.tmpdir, 'gologin_'+self.profile_id)
-        self.profile_zip_path = os.path.join(self.tmpdir, 'gologin_'+self.profile_id+'.zip')
-        self.profile_zip_path_upload = os.path.join(self.tmpdir, 'gologin_'+self.profile_id+'_upload.zip')
+        self.profile_path = os.path.join(self.pathDownload, self.profile_id)
+        self.profile_zip_path = os.path.join(self.pathDownload, ''+self.profile_id+'.zip')
+        self.profile_zip_path_upload = os.path.join(self.pathDownload, 'zip', self.profile_id+'_upload.zip')
 
 
     def loadExtensions(self):
@@ -173,6 +189,11 @@ class GoLogin(object):
             os.remove(self.profile_zip_path_upload)
             shutil.rmtree(self.profile_path)
 
+    def zipProfile(self):
+        zipf = zipfile.ZipFile(self.profile_zip_path_upload, 'w', zipfile.ZIP_DEFLATED)
+        self.zipdir(self.profile_path, zipf)
+        zipf.close()
+
     def commitProfile(self):
         zipf = zipfile.ZipFile(self.profile_zip_path_upload, 'w', zipfile.ZIP_DEFLATED)
         self.zipdir(self.profile_path, zipf)
@@ -229,14 +250,17 @@ class GoLogin(object):
 
 
     def getTimeZone(self):
-        proxy = self.proxy
-        if proxy:            
-            proxies = {
-                'http': self.formatProxyUrlPassword(proxy),
-                'https': self.formatProxyUrlPassword(proxy)
-            }
-            data = requests.get('https://time.gologin.com', proxies=proxies)
-        else:
+        try:
+            proxy = self.proxy
+            if proxy:            
+                proxies = {
+                    'http': self.formatProxyUrlPassword(proxy),
+                    'https': self.formatProxyUrlPassword(proxy)
+                }
+                data = requests.get('https://time.gologin.com', proxies=proxies)
+            else:
+                data = requests.get('https://time.gologin.com')
+        except Exception as e:
             data = requests.get('https://time.gologin.com')
         return json.loads(data.content.decode('utf-8'))
 
@@ -256,7 +280,7 @@ class GoLogin(object):
         s3path = self.profile.get('s3Path', '')
         data = ''
         if s3path=='':
-            # print('downloading profile direct')
+            print('downloading profile direct')
             headers = {
                 'Authorization': 'Bearer ' + self.access_token,
                 'User-Agent': 'Selenium-API'
@@ -287,22 +311,26 @@ class GoLogin(object):
 
     def uploadEmptyProfile(self):
         print('uploadEmptyProfile')
-        upload_profile = open(r'./gologin_zeroprofile.zip', 'wb')
+        upload_profile = open(r'./zeroprofile.zip', 'wb')
         source = requests.get('https://gprofiles.gologin.com/zero_profile.zip')
         upload_profile.write(source.content)
         upload_profile.close
 
     def createEmptyProfile(self):
         print('createEmptyProfile')
-        empty_profile = '../gologin_zeroprofile.zip'
+        empty_profile = '../zeroprofile.zip'
         if not os.path.exists(empty_profile):
-            empty_profile = 'gologin_zeroprofile.zip'
+            empty_profile = 'zeroprofile.zip'
         shutil.copy(empty_profile, self.profile_zip_path)
 
-    def extractProfileZip(self):
-        with zipfile.ZipFile(self.profile_zip_path, 'r') as zip_ref:
-            zip_ref.extractall(self.profile_path)       
-        os.remove(self.profile_zip_path)
+    def extractProfileZip(self, try_count=0):
+        if try_count > 5: return
+        try:
+            with zipfile.ZipFile(self.profile_zip_path, 'r') as zip_ref:
+                zip_ref.extractall(self.profile_path)       
+            os.remove(self.profile_zip_path)
+        except:
+            self.extractProfileZip(try_count+1)
 
 
     def getGeolocationParams(self, profileGeolocationParams, tzGeolocationParams):
@@ -335,7 +363,10 @@ class GoLogin(object):
             'accuracy': self.tz.get('accuracy', 0),
         }
 
-        preferences['geoLocation'] = self.getGeolocationParams(preferences['geolocation'], tzGeoLocation)
+        try:
+            preferences['geoLocation'] = self.getGeolocationParams(preferences['geolocation'], tzGeoLocation)
+        except:
+            pass
 
         preferences['webRtc'] = {
             'mode': 'public' if preferences.get('webRTC',{}).get('mode') == 'alerted' else preferences.get('webRTC',{}).get('mode'),
@@ -401,6 +432,7 @@ class GoLogin(object):
 
     def updatePreferences(self):
         pref_file = os.path.join(self.profile_path, 'Default', 'Preferences')
+        if not os.path.exists(pref_file): return
         with open(pref_file, 'r', encoding="utf-8") as pfile:
             preferences = json.load(pfile)    
         profile = self.profile
@@ -426,7 +458,7 @@ class GoLogin(object):
             profile['proxy']['password'] = profile.get('autoProxyPassword')
         
         if not proxy or proxy.get('mode')=='none':
-            print('no proxy')
+            # print('no proxy')
             proxy = None
         
         if proxy and proxy.get('mode')==None:
@@ -443,8 +475,115 @@ class GoLogin(object):
         if self.credentials_enable_service!=None:
             preferences['credentials_enable_service'] = self.credentials_enable_service
         preferences['gologin'] = gologin
+        if not os.path.exists(pref_file): return
         pfile = open(pref_file, 'w')
         json.dump(preferences, pfile)
+
+    def copyFolderZero(self, profile_id):
+        if not os.path.exists(os.path.join(self.pathDownload, profile_id)):
+            return shutil.copytree(self.pathFolderZero, os.path.join(self.pathDownload, profile_id))
+
+    def updatePreferencesDownload(self):
+        try:
+            self.profile = self.getProfile()
+            pref_file = os.path.join(self.profile_path, 'Default', 'Preferences')
+            # print(pref_file)
+            if not os.path.exists(pref_file): return
+            with open(pref_file, 'r', encoding="utf-8") as pfile:
+                preferences = json.load(pfile)    
+            profile = self.profile
+            profile['profile_id'] = self.profile_id
+            proxy = self.profile.get('proxy')
+            # print('proxy=', proxy)
+            if proxy and (proxy.get('mode')=='gologin' or proxy.get('mode')=='tor'):
+                autoProxyServer = profile.get('autoProxyServer')
+                splittedAutoProxyServer = autoProxyServer.split('://')
+                splittedProxyAddress = splittedAutoProxyServer[1].split(':')
+                port = splittedProxyAddress[1]
+
+                proxy = {
+                'mode': 'http',
+                'host': splittedProxyAddress[0],
+                'port': port,
+                'username': profile.get('autoProxyUsername'),
+                'password': profile.get('autoProxyPassword'),
+                'timezone': profile.get('autoProxyTimezone', 'us'),
+                }
+                
+                profile['proxy']['username'] = profile.get('autoProxyUsername')
+                profile['proxy']['password'] = profile.get('autoProxyPassword')
+            
+            if not proxy or proxy.get('mode')=='none':
+                # print('no proxy')
+                proxy = None
+            
+            if proxy and proxy.get('mode')==None:
+                proxy['mode'] = 'http'
+
+            self.proxy = proxy
+            self.profile_name = profile.get('name')
+            if self.profile_name==None:
+                print('empty profile name')
+                print('profile=', profile)
+                preferences['gologin'] = {}
+                # exit()
+
+            gologin = self.convertPreferences(profile)
+            # with open('pres_gologin.txt', 'a+') as f:
+            #     f.write(json.dumps(gologin, indent=4))
+            # return
+            if self.credentials_enable_service!=None:
+                preferences['credentials_enable_service'] = self.credentials_enable_service
+            
+            language_split = gologin['navigator']['language']
+            language_split = language_split.split(';')[0]
+            
+            preferences['gologin']['audioContext'] = gologin['audioContext']
+            preferences['gologin']['canvasMode'] = gologin['canvasMode']
+            preferences['gologin']['canvasNoise'] = gologin['canvasNoise']
+            preferences['gologin']['client_rects_noise_enable'] = gologin['client_rects_noise_enable']
+            preferences['gologin']['deviceMemory'] = int(gologin['navigator']['deviceMemory'])*1024
+            preferences['gologin']['dns'] = gologin['dns']
+            preferences['gologin']['doNotTrack'] = gologin['navigator']['doNotTrack']
+            preferences['gologin']['geoLocation'] = gologin['geoLocation']
+            preferences['gologin']['getClientRectsNoice'] = gologin['get_client_rects_noise']
+            preferences['gologin']['get_client_rects_noise'] = gologin['get_client_rects_noise']
+            preferences['gologin']['hardwareConcurrency'] = gologin['hardwareConcurrency']
+            preferences['gologin']['langHeader'] = gologin['navigator']['language']
+            preferences['gologin']['languages'] = language_split
+            preferences['gologin']['mediaDevices']['audioInputs'] = gologin['mediaDevices']['audioInputs']
+            preferences['gologin']['mediaDevices']['audioOutputs'] = gologin['mediaDevices']['audioOutputs']
+            preferences['gologin']['mediaDevices']['enable'] = gologin['mediaDevices']['enableMasking']
+            preferences['gologin']['mediaDevices']['uid'] = gologin['mediaDevices']['uid']
+            preferences['gologin']['mediaDevices']['videoInputs'] = gologin['mediaDevices']['videoInputs']
+            preferences['gologin']['mobile']['height'] = gologin['screenWidth']
+            preferences['gologin']['mobile']['width'] = gologin['screenHeight']
+            preferences['gologin']['name'] = gologin['name']
+            preferences['gologin']['navigator']['platform'] = gologin['navigator']['platform']
+            preferences['gologin']['plugins']['all_enable'] = gologin['plugins']['enableVulnerable']
+            preferences['gologin']['plugins']['flash_enable'] = gologin['plugins']['enableFlash']
+            preferences['gologin']['profile_id'] = gologin['id']
+            preferences['gologin']['screenHeight'] = gologin['screenHeight']
+            preferences['gologin']['screenWidth'] = gologin['screenWidth']
+            preferences['gologin']['timezone'] = gologin['timezone']
+            preferences['gologin']['userAgent'] = gologin['userAgent']
+            preferences['gologin']['webGl'] = gologin['webgl']['metadata']
+            preferences['gologin']['webRtc']['mode'] = gologin['webRtc']['mode']
+            preferences['gologin']['webRtc']['localIps'] = gologin['webRtc']['publicIP']
+            preferences['gologin']['webRtc']['public_ip'] = gologin['webRtc']['publicIP']
+            preferences['gologin']['webgl'] = gologin['webgl']
+            preferences['gologin']['webglNoiceEnable'] = gologin['webgl']['metadata']['mode']
+            preferences['gologin']['webglNoiseValue'] = gologin['webgl_noise_value']
+            preferences['gologin']['webglParams'] = gologin['webglParams']
+            preferences['gologin']['webgl_noice_enable'] = gologin['webgl']['metadata']['mode']
+            preferences['gologin']['webgl_noise_enable'] = gologin['webgl']['metadata']['mode']
+            preferences['gologin']['webgl_noise_value'] = gologin['webgl_noise_value']
+
+            if not os.path.exists(pref_file): return
+            pfile = open(pref_file, 'w')
+            json.dump(preferences, pfile)
+        except:
+            pass
 
     def createStartup(self):
         if self.local==False and os.path.exists(self.profile_path):
@@ -476,6 +615,7 @@ class GoLogin(object):
 
     def create(self, options={}):
         profile_options = self.getRandomFingerprint(options)
+        print(profile_options)
         navigator = options.get('navigator')
         if options.get('navigator'):
             resolution = navigator.get('resolution')
@@ -500,7 +640,7 @@ class GoLogin(object):
           "name": "default_name",
           "notes": "auto generated",
           "browserType": "chrome",
-          "os": "lin",
+          "os": "win",
           "googleServicesEnabled": True,
           "lockEnabled": False,
           "audioContext": {
@@ -533,6 +673,7 @@ class GoLogin(object):
             profile[k] = v
 
         response = json.loads(requests.post(API_URL + '/browser/', headers=self.headers(), json=profile).content.decode('utf-8'))
+        print(response)
         return response.get('id')
 
 
