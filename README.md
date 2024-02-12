@@ -10,7 +10,10 @@ GoLogin supports Linux, MacOS and Windows platforms.
 
 ### Installation
 
-clone or download this repository
+
+`pip3 install gologin`
+
+or clone this repository
 
 `git clone https://github.com/gologinapp/pygologin.git`
 
@@ -27,6 +30,8 @@ To have an access to the page below you need <a href="https://app.gologin.com/#/
 
 ![Token API in Settings](https://user-images.githubusercontent.com/12957968/146891933-c3b60b4d-c850-47a5-8adf-bc8c37372664.gif)
 
+### !!! Attention !!! If your selenium version is greater than or equal to 4.11, then you should use the "gologin-selenium_4.11.py" script, otherwise use "gologin-selenium.py" script
+
 ### Example "gologin-selenium.py"
 
 ```py
@@ -35,7 +40,7 @@ from sys import platform
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from gologin import GoLogin
-from gologin import get_random_port
+from gologin import getRandomPort
 
 # random_port = get_random_port() # uncomment to use random port
 
